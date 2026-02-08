@@ -41,7 +41,7 @@ This code of simulation part for paper "Distributed prediction under heterogenei
 
 - Lib
 - opt
-- var
+- simulaiton
   - var_n
   - var_m
   - var_sig
