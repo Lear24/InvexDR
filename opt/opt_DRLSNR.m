@@ -1,0 +1,81 @@
+function [beta_estimated,trsimi,objall,fnorm,stop] = ...
+    opt_DRLSNR(beta_initial,X,Y,m,n,p,d,T_max,K_max,lambda,N_max,real_beta,varargin)
+% stop: 0 - max iter; 1 - convergence; (ignore the increase case )
+optionsOPT = varargin{1};
+optionsInvVar = varargin{2};
+optionsKer = varargin{3};
+trsimi = zeros(N_max+1,m);
+objall = zeros(N_max+1,T_max+1);
+N=1; stop =0;
+ts = util_TraceSimilarity(beta_initial,real_beta,m,d);
+f = util_Fnorm(beta_initial, real_beta,m,d);
+trsimi(N,:) = ts';
+fnorm(N,:) = f;
+
+X = util_stand(X,m);
+
+
+
+
+
+
+while (N<=N_max) && (stop ==0)
+    fprintf('通信轮次%d时,',N);
+    N = N + 1;
+
+    InvVar = KerInvVar(X,Y,beta_initial,m,n,optionsInvVar);
+    [hX,hY,~,~] = KerHatXY(X,Y,beta_initial,InvVar,m,n,p,d,optionsKer);
+    [beta_estimated,objective_value] = ...
+        opt_DHDR(beta_initial,hX,hY,m,n,p,d,T_max,K_max,lambda,optionsOPT);
+
+    % 记录机制
+    beta_initial = beta_estimated;
+    ts = util_TraceSimilarity(beta_estimated, real_beta,m,d);
+    f = util_Fnorm(beta_estimated, real_beta,m,d);
+    trsimi(N,:) = ts';
+    fnorm(N,:) = f;
+    objall(N,:) = objective_value';
+    fprintf('----------------------------------------------------------\n\n');
+    % 退出机制
+    if abs(objall(N-1,1) - objall(N,1) ) < 0.0001
+        fprintf('在通信轮次%d时, 目标函数值cost为 %f \n',N,objall(N,1));
+        fprintf('算法收敛,总共通讯了%d轮---------------------------------\n\n\n',N);
+        stop = 1;
+        trsimi(N+1:end,:) = [];
+        objall(N+1:end,:) = [];
+        fnorm(N+1:end,:) = [];
+        break;
+    elseif  (objall(N,1) - objall(N-1,1) >0.01) && N>2 %若目标函数值增加
+        fprintf('在通信轮次%d时, 损失函数增加,目标函数值cost为 %f \n',N,objall(N-1,1));
+        fprintf('算法收敛,总共通讯了%d轮---------------------------------\n\n\n',N-1);
+        stop = 2;
+        trsimi(N+1,:) = trsimi(N-1,:);
+        objall(N+1,:) = objall(N-1,:);
+        fnorm(N+1,:) = fnorm(N-1,:);
+        trsimi(N+2:end,:) = []; %还是保留增加了的 看看情况
+        objall(N+2:end,:) = [];
+        fnorm(N+2:end,:) = [];
+        break;
+    end
+
+end
+
+end
+
+function ts = util_TraceSimilarity(beta, real_beta,m,d)
+
+ts = zeros(m,1);
+for mi = 1: m
+    A = util_projection(beta{mi}); B = util_projection(real_beta{mi});
+    ts(mi) = trace(A*B)/d;
+end
+end
+
+function fnorm = util_Fnorm(beta, real_beta,m,d)
+
+fnorm = zeros(m,1);
+for mi = 1: m
+    A = util_projection(beta{mi}); B = util_projection(real_beta{mi});
+    fnorm(mi) = norm(A-B,'fro');
+end
+end

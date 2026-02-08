@@ -1,0 +1,118 @@
+function [beta_estimated,objective_value] = ...
+        opt_cDHDR_block(beta_initial,X,Y,m,n,p,d,T_max,K_max,lambda,varargin)
+% varargin: 'original', 'cosine' or 'invex'
+% - Input:
+%   - beta_initial: p-by-d matrix, collected as m-by-1 cell.
+%   - X: p*d-by-n matrix, collected as m-by-1 cell. 尽量用 'vector'
+%   - Y: n-by-1 matrix, collected as m-by-1 cell. 
+%   - m,n,p,d: the number of nodes, samples, original dimension and
+%              reduction dimensions
+%   - T_max: communication round; 
+%   - K_max: local update rounds.
+% - Output:
+%   - beta_estimated: p-by-d matrix, collected as m-by-1 cell.
+%   - objective_value: the objective in each communication round
+
+mode = varargin{1};
+modeL = mode{1};modeP = mode{2};modegrad = mode{3};
+
+objective_value = zeros(T_max+1,1);
+beta_estimated=beta_initial;
+objGiNew = zeros(m,1);
+
+[objective_value(1),objGi] = CostEachNode(beta_initial,X,Y,m,n,lambda,mode);
+fprintf('初始函数值为%.4f \n',objective_value(1));
+
+step = 0.005;
+aclr = 0.9;
+
+coef_v = cell(m,1);coef_intial = cell(m,1);coef_update = cell(m,1);
+
+
+for T = 1:T_max
+    cost_temp=zeros(m,1);
+    beta_initial = beta_estimated;
+    
+    for mi=1:m
+        
+        Xi=cell2mat(X(mi));
+        Yi=cell2mat(Y(mi));
+        n_i = n(mi);
+        alpha = cell2mat(beta_initial(mi));
+        alphanew = cell2mat(coef_update(mi));
+        v = cell2mat(coef_v(mi));
+        beta_cell = beta_initial;
+        % optimalization part on local client------------------------------
+        for K = 1:K_max
+            if (T==1) && (K==1)
+                beta_cell(mi) = mat2cell(alpha,p,d);
+                [~ ,grad]= obj_cDHDR_block(alpha,beta_cell,m,n_i,Yi,Xi,lambda,mode);
+                alphanew = alpha - step*grad;
+                v = alphanew + aclr*(alphanew - alpha);
+                beta_cell(mi) = mat2cell(alphanew,p,d);
+            else
+                beta_cell(mi) = mat2cell(v,p,d);
+                [~ ,grad]= obj_cDHDR_block(v,beta_cell,m,n_i,Yi,Xi,lambda,mode);
+                alpha =alphanew;
+                alphanew = v - step*grad;
+                v = alphanew  + aclr*(alphanew  - alpha);
+                beta_cell(mi) = mat2cell(alphanew,p,d);
+            end
+            coef_v(mi) = mat2cell(v,p,d);
+            coef_intial(mi) = mat2cell(alpha,p,d);
+            coef_update(mi) = mat2cell(alphanew,p,d);
+            
+        end
+        beta_cell(mi) = mat2cell(alphanew,p,d);
+        [objGiNew(mi) ,~]= obj_cDHDR_block(alphanew,beta_cell,m,n_i,Yi,Xi,lambda,mode);
+        % feadback the optimalization result on local client---------------
+        beta_estimated(mi) = mat2cell(alphanew,p,d);
+        
+    end
+    
+    % At the server, Broadcast the value of the objective function---------
+    if  mod(T,100)==0
+        fprintf('在轮次%d时, 目标函数值cost为 %f \n',T,sum(objGiNew));
+    end
+    % At the server, determine whether to exit the loop--------------------
+    if abs(sum(objGiNew)-sum(objGi))<10^(-5)
+        fprintf('在轮次%d时, 目标函数值cost为 %f \n',T,sum(objGiNew));
+        fprintf('算法收敛,总共通讯了%d轮\n',T);
+        objective_value(T+1:end) = sum(objGiNew);% 算法收敛, 记录最终的目标函数值
+%         objective_value(T+20:end) = [];
+        break;
+    elseif sum(objGiNew)-sum(objGi)>0.03 && T >= 2
+        fprintf('损失函数增加,算法收敛,总共通讯了%d轮\n',T);
+        fprintf('在轮次%d时, 目标函数值cost为 %f \n',T,sum(objGi)); % 保留更新之前的结果
+        beta_estimated = beta_initial;
+        objective_value(T+1:end) =  sum(objGi);
+        % objective_value(T+20:end) = [];
+        break;
+    else
+        % continue loop-----------
+        objGi=objGiNew;
+        objective_value(T+1) = sum(objGi); % record objective function value
+    end
+    % The conmunication round --------------------------------------------- 
+    
+end
+
+
+
+
+end
+
+function [objG,objGi] = CostEachNode(beta,X,Y,m,n,lambda,varargin)
+mode = varargin{1};
+objGi = zeros(m,1);
+
+for i = 1:m
+    Xi=cell2mat(X(i));
+    Yi=cell2mat(Y(i));
+    alpha = cell2mat(beta(i));
+    objGi(i) =  obj_cDHDR_block(alpha,beta,m,n(i),Yi,Xi,lambda,mode);
+end
+
+objG = sum(objGi);
+
+end
